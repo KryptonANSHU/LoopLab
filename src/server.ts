@@ -1,3 +1,4 @@
+import path from "node:path";
 import express from "express";
 import { getJob, listJobs } from "./jobs/jobStore.js";
 import { cancelJob, scheduleOneTimeJob, scheduleRecurringJob } from "./jobs/scheduler.js";
@@ -8,6 +9,9 @@ const PORT = 3000;
 const app = express();
 
 app.use(express.json());
+
+// Serves the files in /public. A request for "/" gets public/index.html.
+app.use(express.static(path.join(import.meta.dirname, "..", "public")));
 
 app.get("/health", (_req, res) => {
   res.json({
