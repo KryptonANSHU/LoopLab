@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LoopLab</title>
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 860px; margin: 2rem auto; padding: 0 1rem; }
+      form { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: end; }
+      label { display: flex; flex-direction: column; font-size: 0.85rem; gap: 0.25rem; }
+      input, select, button { font: inherit; padding: 0.35rem 0.5rem; }
+      #error { color: #b00020; min-height: 1.25rem; }
+      #updated { color: #666; font-size: 0.85rem; }
+      table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
+      th, td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid #ddd; }
+      .status-scheduled { color: #8a6d00; }
+      .status-running { color: #0b57d0; font-weight: 600; }
+      .status-done { color: #1b7f3b; }
+      .status-cancelled { color: #666; }
+      .status-failed { color: #b00020; }
+    </style>
+  </head>
+  <body>
+    <h1>LoopLab</h1>
+
+    <form id="job-form">
+      <label>
+        Message
+        <input id="message" value="hello" />
+      </label>
+      <label>
+        Type
+        <select id="type">
+          <option value="delayMs">One-time</option>
+          <option value="intervalMs">Recurring</option>
+        </select>
+      </label>
+      <label>
+        <span id="ms-label">Delay (ms)</span>
+        <input id="ms" type="number" value="3000" />
+      </label>
+      <button type="submit">Create job</button>
+    </form>
+
+    <p id="error" role="alert"></p>
+    <p id="updated">Waiting for the first update...</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Id</th>
+          <th>Type</th>
+          <th>Message</th>
+          <th>Status</th>
+          <th>Runs</th>
+          <th>Next run</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="jobs"></tbody>
+    </table>
+
+    <script>
+      const form = document.getElementById("job-form");
+      const messageInput = document.getElementById("message");
+      const typeSelect = document.getElementById("type");
+      const msInput = document.getElementById("ms");
+      const msLabel = document.getElementById("ms-label");
+      const errorEl = document.getElementById("error");
+      const updatedEl = document.getElementById("updated");
+      const jobsBody = document.getElementById("jobs");
+
+      const SERVER_DOWN = "Could not reach the server";
+
+      function showError(text) {
+        errorEl.textContent = text;
+      }
+
+      // The form has no min, max or required on purpose.
+      // We want to see the server's own 400 messages.
+      typeSelect.addEventListener("change", () => {
+        const isRecurring = typeSelect.value === "intervalMs";
+        msLabel.textContent = isRecurring ? "Interval (ms)" : "Delay (ms)";
+        msInput.value = isRecurring ? "1000" : "3000";
+      });
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        // An empty number box becomes undefined, so JSON.stringify leaves it out.
+        const ms = msInput.value === "" ? undefined : Number(msInput.value);
+        const body = { message: messageInput.value, [typeSelect.value]: ms };
+
+        try {
+          const res = await fetch("/jobs", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          const data = await res.json();
+          showError(res.ok ? "" : data.error);
+          await refreshJobs();
+        } catch {
+          showError(SERVER_DOWN);
+        }
+      });
+
+      async function cancelJob(id) {
+        try {
+          const res = await fetch(`/jobs/${id}`, { method: "DELETE" });
+          const data = await res.json();
+          showError(res.ok ? "" : data.error);
+          await refreshJobs();
+        } catch {
+          showError(SERVER_DOWN);
+        }
+      }
+
+      function cell(text) {
+        const td = document.createElement("td");
+        td.textContent = text; // textContent, not innerHTML, so a message can't inject HTML
+        return td;
+      }
+
+      function renderRow(job) {
+        const tr = document.createElement("tr");
+        tr.append(cell(job.id.slice(0, 8)), cell(job.type), cell(job.message));
+
+        const status = cell(job.status);
+        status.className = `status-${job.status}`;
+        tr.append(status, cell(String(job.runs)));
+
+        const active = job.status === "scheduled" || job.status === "running";
+        tr.append(cell(active ? new Date(job.runAt).toLocaleTimeString() : "-"));
+
+        const action = document.createElement("td");
+        if (active) {
+          const button = document.createElement("button");
+          button.textContent = "Cancel";
+          button.addEventListener("click", () => cancelJob(job.id));
+          action.append(button);
+        }
+        tr.append(action);
+        return tr;
+      }
+
+      async function refreshJobs() {
+        try {
+          const res = await fetch("/jobs");
+          const jobs = await res.json();
+          jobsBody.replaceChildren(...jobs.reverse().map(renderRow)); // newest first
+          updatedEl.textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
+        } catch {
+          updatedEl.textContent = `${SERVER_DOWN}. Last try: ${new Date().toLocaleTimeString()}`;
+        }
+      }
+
+      // Same idea as our recurring jobs: the next poll is scheduled only after the
+      // last one finished, so slow responses can never pile up.
+      async function pollForever() {
+        await refreshJobs();
+        setTimeout(pollForever, 1000);
+      }
+      pollForever();
+    </script>
+  </body>
+</html>
